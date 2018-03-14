@@ -17,6 +17,7 @@ class FilamentReloadedPlugin(octoprint.plugin.StartupPlugin,
         if GPIO.VERSION < "0.6":       # Need at least 0.6 for edge detection
             raise Exception("RPi.GPIO must be greater than 0.6")
         GPIO.setwarnings(False)        # Disable GPIO warnings
+        self.filament_stop_triggered = False
 
     @property
     def pin(self):
@@ -114,8 +115,12 @@ class FilamentReloadedPlugin(octoprint.plugin.StartupPlugin,
 
     def sensor_callback(self, _):
         sleep(self.bounce/1000)
-        if self.no_filament():
+        self.check_filament()
+
+    def check_filament(self):
+        if not self.filament_stop_triggered and self.no_filament():
             self._logger.info("Out of filament!")
+            self.filament_stop_triggered = True
             if self.pause_print:
                 self._logger.info("Pausing print.")
                 self._printer.pause_print()
@@ -142,6 +147,17 @@ class FilamentReloadedPlugin(octoprint.plugin.StartupPlugin,
             )
         )
 
+    def gcode_received_hook(self, comm, line):
+        args = line.split(' ')
+        if self.filament_stop_triggered and args and args[0] == 'ok':
+            # print resume detected
+            # check filament sensor again, and stop if not detected
+            self._logger.info("Print resumed")
+            self.filament_stop_triggered = False
+            self.check_filament()
+
+        return line
+
 __plugin_name__ = "Filament Sensor Reloaded"
 __plugin_version__ = "1.0.1"
 
@@ -151,5 +167,6 @@ def __plugin_load__():
 
     global __plugin_hooks__
     __plugin_hooks__ = {
-        "octoprint.plugin.softwareupdate.check_config": __plugin_implementation__.get_update_information
+        "octoprint.plugin.softwareupdate.check_config": __plugin_implementation__.get_update_information,
+        "octoprint.comm.protocol.gcode.received": __plugin_implementation__.gcode_received_hook
 }
